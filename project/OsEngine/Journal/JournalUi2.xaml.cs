@@ -44,6 +44,9 @@ namespace OsEngine.Journal
             InitializeComponent();
             OsEngine.Layout.StickyBorders.Listen(this);
 
+            //LabelBenchmark.Visibility = Visibility.Hidden;
+            //ComboBoxBenchmark.Visibility = Visibility.Hidden;
+
             _startProgram = startProgram;
             _botsJournals = botsJournals;
 
@@ -232,10 +235,24 @@ namespace OsEngine.Journal
                 {
                     _chartPortfolio.MouseMove -= _chartEquity_MouseMove;
                     _chartPortfolio.MouseWheel -= _chartEquity_MouseWheel;
-
                     _chartPortfolio.Series.Clear();
                     _chartPortfolio.ChartAreas.Clear();
                     _chartPortfolio = null;
+                }
+
+                if (_gridLeveragePortfolio != null)
+                {
+                    DataGridFactory.ClearLinks(_gridLeveragePortfolio);
+                    _gridLeveragePortfolio.Rows.Clear();
+                    _gridLeveragePortfolio.DataError -= _gridLeveragePortfolio_DataError;
+                    _gridLeveragePortfolio.Dispose();
+                    _gridLeveragePortfolio = null;                   
+                }
+
+                if (_layoutPanelPortfolio != null)
+                {
+                    _layoutPanelPortfolio.Controls.Clear();
+                    _layoutPanelPortfolio = null;
                     HostVolumePortfolio.Child.Hide();
                     HostVolumePortfolio.Child = null;
                     HostVolumePortfolio = null;
@@ -2057,6 +2074,8 @@ namespace OsEngine.Journal
 
         DataGridView _gridLeveragePortfolio;
 
+        TableLayoutPanel _layoutPanelPortfolio;
+
         private void CreateChartPortfolio()
         {
             try
@@ -2108,6 +2127,7 @@ namespace OsEngine.Journal
                 _gridLeveragePortfolio = DataGridFactory.GetDataGridView(DataGridViewSelectionMode.FullRowSelect, DataGridViewAutoSizeRowsMode.None);
 
                 _gridLeveragePortfolio.AllowUserToResizeRows = false;
+                _gridLeveragePortfolio.AllowUserToResizeColumns = true;
                 _gridLeveragePortfolio.ColumnCount = 2;
                 _gridLeveragePortfolio.RowCount = 0;
                 _gridLeveragePortfolio.Dock = DockStyle.Fill;
@@ -2120,8 +2140,8 @@ namespace OsEngine.Journal
                     column.ReadOnly = true;
                 }
 
-                _gridLeveragePortfolio.Columns[0].HeaderText = "Leverage";
-                _gridLeveragePortfolio.Columns[1].HeaderText = "Time at %";
+                _gridLeveragePortfolio.Columns[0].HeaderText = OsLocalization.Journal.LeverageGridColumn0;
+                _gridLeveragePortfolio.Columns[1].HeaderText = OsLocalization.Journal.LeverageGridColumn1;
 
                 CustomDataGridViewCell cell0 = new CustomDataGridViewCell();
                 cell0.Style = _gridLeveragePortfolio.DefaultCellStyle;
@@ -2133,22 +2153,29 @@ namespace OsEngine.Journal
                     Right = DataGridViewAdvancedCellBorderStyle.Inset
                 };
 
-                TableLayoutPanel panelPortfolio = new TableLayoutPanel();
-                panelPortfolio.Dock = DockStyle.Fill;
-                panelPortfolio.ColumnCount = 2;
-                panelPortfolio.RowCount = 1;
-                panelPortfolio.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 80));
-                panelPortfolio.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));               
-                panelPortfolio.Controls.Add(_chartPortfolio, 0, 0);
-                panelPortfolio.Controls.Add(_gridLeveragePortfolio, 1, 0);
+                _gridLeveragePortfolio.DataError += _gridLeveragePortfolio_DataError;
 
-                HostVolumePortfolio.Child = panelPortfolio;
+                _layoutPanelPortfolio = new TableLayoutPanel();
+                _layoutPanelPortfolio.Dock = DockStyle.Fill;
+                _layoutPanelPortfolio.ColumnCount = 2;
+                _layoutPanelPortfolio.RowCount = 1;
+                _layoutPanelPortfolio.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 80));
+                _layoutPanelPortfolio.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));               
+                _layoutPanelPortfolio.Controls.Add(_chartPortfolio, 0, 0);
+                _layoutPanelPortfolio.Controls.Add(_gridLeveragePortfolio, 1, 0);
+
+                HostVolumePortfolio.Child = _layoutPanelPortfolio;
                 HostVolumePortfolio.Child.Show();
             }
             catch (Exception error)
             {
                 SendNewLogMessage(error.ToString(), LogMessageType.Error);
             }
+        }
+
+        private void _gridLeveragePortfolio_DataError(object sender, DataGridViewDataErrorEventArgs e)
+        {
+            ServerMaster.SendNewLogMessage(e.ToString(), Logging.LogMessageType.Error);
         }
 
         private void _chartPortfolio_MouseWheel(object sender, MouseEventArgs e)
@@ -2314,40 +2341,180 @@ namespace OsEngine.Journal
                 leverageBars.ChartArea = "ChartAreaPortfolioBar";
                 leverageBars.ShadowOffset = 2;
 
+                List<DateTime> allChange = new List<DateTime>();
+
+                for (int i = 0; i < positionsAll.Count; i++)
+                {
+                    Position pos = positionsAll[i];
+                    DateTime timeCreate = pos.TimeCreate;
+                    DateTime timeClose = pos.TimeClose;
+
+                    if (allChange.FindIndex(chnge => chnge == timeCreate) == -1)
+                    {
+                        allChange.Add(timeCreate);
+                    }
+
+                    if (pos.State == PositionStateType.Done)
+                    {
+                        if (allChange.FindIndex(chnge => chnge == timeClose) == -1)
+                        {
+                            allChange.Add(timeClose);
+                        }
+                    }
+                }
+
+                allChange = allChange.OrderBy(x => x).ToList();
+
+                decimal[] values = new decimal[allChange.Count];
+                List<decimal> volume = new(values);
+                List<decimal> deposit = new(values);
+
                 SortedDictionary<decimal, TimeSpan> leverageList = new();
 
                 for (int i = 0; i < positionsAll.Count; i++)
                 {
-                    decimal totalDataPoint = positionsAll[i].PortfolioValueOnOpenPosition;
-                    totalPortfolio.Points.AddXY(i, totalDataPoint);
-                    totalPortfolio.Points[^1].AxisLabel = positionsAll[i].TimeCreate.ToString();
-
-                    decimal volumeDataPoint = positionsAll[i].MaxVolume * positionsAll[i].EntryPrice;
-                    volumePortfolio.Points.AddXY(i, volumeDataPoint);
-                    volumePortfolio.Points[^1].AxisLabel = positionsAll[i].TimeCreate.ToString();
-
-                    decimal leverage = Math.Round(volumeDataPoint / totalDataPoint, 2);
-                    leverageBars.Points.AddXY(i, leverage);
-                    leverageBars.Points[^1].AxisLabel = positionsAll[i].TimeCreate.ToString();
-
-                    leverageBars.Points[^1].Color = GetColorForLeverageLevel(leverageBars.Points[^1].YValues[0]);
+                    Position pos = positionsAll[i];
                     
-                    decimal leverageLevel = Math.Round(leverage, MidpointRounding.ToPositiveInfinity);
-
-                    if (leverageList.ContainsKey(leverageLevel))
+                    if (pos.MaxVolume == 0)
                     {
-                        leverageList[Math.Round(leverageLevel)] += positionsAll[i].TimeClose - positionsAll[i].TimeCreate;
+                        continue;
+                    }
+
+                    DateTime timeCreate = pos.TimeCreate;
+                    DateTime timeClose = pos.TimeClose;
+                                        
+                    int indexOpen = allChange.FindIndex(change => change == timeCreate);
+                    int indexClose = allChange.FindIndex(change => change == timeClose);
+
+                    if (indexOpen != -1)
+                    {                        
+                        volume[indexOpen] += pos.MaxVolume * pos.EntryPrice;
+                        deposit[indexOpen] = pos.PortfolioValueOnOpenPosition;
+                    }
+
+                    if (pos.State == PositionStateType.Done
+                        && indexClose != -1)
+                    {
+                        volume[indexClose] -= pos.MaxVolume * pos.EntryPrice;
+                        deposit[indexClose] = pos.PortfolioValueOnOpenPosition;
+                    }
+                }
+
+                List<decimal> volumeData = new();
+
+                for (int i = 0; i < volume.Count; i++)
+                {   
+                    if (i > 0)
+                    {
+                        volumeData.Add(volumeData[^1] + volume[i]);
                     }
                     else
                     {
-                        leverageList[Math.Round(leverageLevel)] = positionsAll[i].TimeClose - positionsAll[i].TimeCreate;
-                    }                        
+                        volumeData.Add(volume[i]);
+                    }                    
                 }
 
-                _chartPortfolio.Series.Add(totalPortfolio);
+                decimal maxVolume = 0;
+                decimal minVolume = decimal.MaxValue;
+
+                for (int i = 0; i < allChange.Count; i++)
+                {
+                    decimal totalDataPoint = Math.Round(deposit[i],4);
+                    totalPortfolio.Points.AddXY(i, totalDataPoint);
+                    totalPortfolio.Points[^1].AxisLabel = allChange[i].ToString();
+
+                    decimal volumeDataPoint = Math.Round(volumeData[i],4);             
+                    volumePortfolio.Points.AddXY(i, volumeDataPoint);
+                    volumePortfolio.Points[^1].AxisLabel = allChange[i].ToString();
+
+                    decimal leverage = Math.Round(volumeDataPoint / totalDataPoint, 2);
+                    leverageBars.Points.AddXY(i, leverage);
+                    leverageBars.Points[^1].AxisLabel = allChange[i].ToString();
+
+                    leverageBars.Points[^1].Color = GetColorForLeverageLevel(leverageBars.Points[^1].YValues[0]);
+
+                    decimal leverageLevel = Math.Round(leverage, MidpointRounding.ToPositiveInfinity);
+
+                    if (leverage > 1 && leverage <= 1.5m)
+                    {
+                        leverageLevel = 1.5m;
+                    }
+                    else if (leverage > 1.5m && leverage <= 2)
+                    {
+                        leverageLevel = 2;
+                    }
+                    else if (leverage > 2 && leverage <= 2.5m)
+                    {
+                        leverageLevel = 2.5m;
+                    }
+                    else if (leverage > 2.5m && leverage <= 3)
+                    {
+                        leverageLevel = 3;
+                    }
+
+                    if (leverageLevel == 0)
+                    {
+                        leverageLevel = 1;
+                    }
+
+                    if (i < allChange.Count - 1)
+                    {
+                        if (leverageList.ContainsKey(leverageLevel))
+                        {
+                            leverageList[leverageLevel] += allChange[i + 1] - allChange[i];
+                        }
+                        else
+                        {
+                            leverageList[leverageLevel] = allChange[i + 1] - allChange[i];
+                        }
+                    }
+
+                    if (volumeData[i] > maxVolume)
+                    {
+                        maxVolume = volumeData[i];
+                    }
+                    if (volumeData[i] < minVolume)
+                    {
+                        minVolume = volumeData[i];
+                    }
+
+                    if (deposit[i] > maxVolume)
+                    {
+                        maxVolume = deposit[i];
+                    }
+                    if (deposit[i] < minVolume)
+                    {
+                        minVolume = deposit[i];
+                    }
+                }
+
+                if (minVolume != decimal.MaxValue &&
+                    maxVolume != 0 &&
+                    minVolume != maxVolume)
+                {
+                    double valueMax = Convert.ToDouble(maxVolume + (maxVolume * 0.05m));
+                    double valueMin = Convert.ToDouble(minVolume - (minVolume * 0.05m));
+
+                    valueMax = Math.Round(valueMax, 4);
+                    valueMin = Math.Round(valueMin, 4);
+
+                    if(valueMax > valueMin)
+                    {
+                        _chartPortfolio.ChartAreas["ChartAreaPortfolio"].AxisY2.Maximum = valueMax;
+                        _chartPortfolio.ChartAreas["ChartAreaPortfolio"].AxisY2.Minimum = valueMin;
+                        double interval = Convert.ToDouble(Math.Abs(maxVolume - minVolume) / 8);
+
+                        interval = Math.Round(interval, 4);
+
+                        _chartPortfolio.ChartAreas["ChartAreaPortfolio"].AxisY2.Interval = interval;
+
+                    }
+                }
+
                 _chartPortfolio.Series.Add(volumePortfolio);
+                _chartPortfolio.Series.Add(totalPortfolio);
                 _chartPortfolio.Series.Add(leverageBars);
-                                
+
                 AddDataToGridLeverage(leverageList);
             }
             catch (Exception error)
@@ -2400,21 +2567,45 @@ namespace OsEngine.Journal
                     timeSpan += keys.Value;
                 }
                 
-                for (int i = 1; i <= count; i++)
+                for (int i = 0; i < leverageList.Count; i++)
                 {
                     DataGridViewRow newRow = new DataGridViewRow();
-                    newRow.Cells.Add(new DataGridViewTextBoxCell() { Value = $"{i - 1} - {i}" });
 
-                    if (leverageList.ContainsKey(i))
+                    string value = $"{i - 1} - {i}";
+
+                    decimal key = leverageList.Keys.ElementAt(i);
+
+                    switch (leverageList.Keys.ElementAt(i))
                     {
-                        newRow.Cells.Add(new DataGridViewTextBoxCell() { Value = Math.Round(leverageList[i].TotalSeconds / timeSpan.TotalSeconds * 100, 2) + "%" });
+                        case 1:
+                            value = "0 - 1";
+                            break;
+                        case 1.5m:
+                            value = "1 - 1.5";
+                            break;
+                        case 2:
+                            value = "1.5 - 2";
+                            break;
+                        case 2.5m:
+                            value = "2 - 2.5";
+                            break;
+                        case 3:
+                            value = "2.5 - 3";
+                            break;
+                    }
+
+                    newRow.Cells.Add(new DataGridViewTextBoxCell() { Value = value });
+
+                    if (leverageList.ContainsKey(key))
+                    {
+                        newRow.Cells.Add(new DataGridViewTextBoxCell() { Value = Math.Round(leverageList[key].TotalSeconds / timeSpan.TotalSeconds * 100, 2) + "%" });
                     }
                     else
                     {
                         newRow.Cells.Add(new DataGridViewTextBoxCell() { Value = "0%" });
                     }
 
-                    newRow.DefaultCellStyle.ForeColor = GetColorForLeverageLevel(i - 0.1);
+                    newRow.DefaultCellStyle.ForeColor = GetColorForLeverageLevel((double)key - 0.1);
                     newRow.DefaultCellStyle.SelectionForeColor = newRow.DefaultCellStyle.ForeColor;
 
                     _gridLeveragePortfolio.Rows.Add(newRow);
